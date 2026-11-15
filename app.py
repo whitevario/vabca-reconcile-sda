@@ -596,16 +596,11 @@ def render_rekon():
 
 @st.fragment
 def render_edit():
-    # --- INISIALISASI VERSI EDITOR (Agar tabel langsung terupdate) ---
-    if "edit_ver" not in st.session_state:
-        st.session_state.edit_ver = 0
-
     col_title, col_btn = st.columns([4, 1])
     with col_title:
         st.subheader("✏️ Edit Data (Koreksi NO.VA)")
     with col_btn:
         if st.button("🔄 Refresh Data", use_container_width=True):
-            st.session_state.edit_ver += 1
             st.cache_data.clear()
             st.rerun()
 
@@ -614,7 +609,6 @@ def render_edit():
     if not df_edit.empty:
         df_filtered = apply_filters_edit(df_edit, key_prefix="edit")
         
-        # Validasi limit baris
         if len(df_filtered) > 1000:
             st.warning(f"⚠️ Menampilkan {len(df_filtered):,} baris bisa membuat browser lambat. Mohon persempit filter hingga di bawah 1000 baris.")
             st.stop()
@@ -682,8 +676,9 @@ def render_edit():
                             db.update_no_va_bulk_vector(df_filtered, df_updates)
                         st.success(f"✅ {len(df_updates)} data diubah/dihapus secara instan!")
                         
-                        st.session_state.edit_ver += 1  # Paksa reload tabel
-                        st.cache_data.clear()
+                        # --- KUNCI PERBAIKANNYA DI SINI ---
+                        st.session_state.clear() # Hapus memori tabel
+                        st.cache_data.clear()    # Hapus cache data
                         st.rerun()
 
             # -- TAB 2: TAMBAH KARAKTER --
@@ -742,17 +737,19 @@ def render_edit():
                                 db.update_no_va_bulk_vector(df_filtered, df_updates)
                             st.success(f"✅ {len(df_updates)} data ditambahi karakter secara instan!")
                             
-                            st.session_state.edit_ver += 1  # Paksa reload tabel
+                            # --- KUNCI PERBAIKANNYA DI SINI ---
+                            st.session_state.clear()
                             st.cache_data.clear()
                             st.rerun()
 
         st.divider()
         
         # --- TABEL EDITOR ---
+        # Kita tidak perlu key dinamis lagi karena st.session_state sudah dibersihkan
         edited_df = st.data_editor(
             df_filtered[["id", "date", "no_va", "remark", "credit", "tahun_bayar"]],
             disabled=["id", "date", "remark", "credit", "tahun_bayar"], 
-            key=f"editor_no_va_{st.session_state.edit_ver}",  # Kunci dinamis agar terupdate
+            key="editor_no_va", 
             use_container_width=False, 
             hide_index=True,
             column_config={
@@ -799,11 +796,12 @@ def render_edit():
                     db.update_no_va_bulk_vector(df_filtered, df_updates)
                 st.success(f"✅ {len(df_updates)} perubahan disimpan secara instan!")
                 
-                st.session_state.edit_ver += 1  # Paksa reload tabel
+                st.session_state.clear()
                 st.cache_data.clear()
                 st.rerun()
             else:
                 st.info("Tidak ada perubahan yang perlu disimpan.")
+                
 @st.fragment
 def render_master():
     st.subheader("⚙️ Master Data")
