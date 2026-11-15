@@ -602,51 +602,114 @@ def render_edit():
     if not df_edit.empty:
         df_filtered = apply_filters_edit(df_edit, key_prefix="edit")
         
-        with st.expander("🛠️ Ganti Karakter Massal"):
-            c1, c2, c3 = st.columns(3)
-            posisi = c1.number_input("Karakter ke-", min_value=1, value=3)
-            jml_karakter = c2.number_input("Jumlah diganti", min_value=1, value=2)
-            pengganti = c3.text_input("Diganti jadi", value="00")
+        with st.expander("🛠️ Ganti Karakter Massal"):    
+            tab_ganti, tab_tambah = st.tabs(["🔄 Ganti Karakter", "➕ Tambah Karakter"])
             
-            def replace_massal(no_va):
-                no_va = str(no_va); start_idx = int(posisi) - 1; end_idx = start_idx + int(jml_karakter)
-                return no_va[:start_idx] + pengganti + no_va[end_idx:]
+            # ==========================================
+            # TAB 1: GANTI KARAKTER (Fitur Lama)
+            # ==========================================
+            with tab_ganti:
+                c1, c2, c3 = st.columns(3)
+                posisi = c1.number_input("Karakter ke-", min_value=1, value=3, key="ganti_pos")
+                jml_karakter = c2.number_input("Jumlah diganti", min_value=1, value=2, key="ganti_jml")
+                pengganti = c3.text_input("Diganti jadi", value="00", key="ganti_str")
                 
-            if st.button("👀 Preview", key="prev_massal"):
-                df_prev = df_filtered.head(10).copy(); df_prev["Lama"] = df_prev["no_va"]; df_prev["Baru"] = df_prev["no_va"].apply(replace_massal)
-                st.dataframe(df_prev[["remark", "Lama", "Baru"]], use_container_width=False, hide_index=True)
+                def replace_massal(no_va):
+                    no_va = str(no_va); start_idx = int(posisi) - 1; end_idx = start_idx + int(jml_karakter)
+                    return no_va[:start_idx] + pengganti + no_va[end_idx:]
+                    
+                if st.button("👀 Preview Ganti", key="prev_ganti"):
+                    df_prev = df_filtered.head(10).copy(); df_prev["Lama"] = df_prev["no_va"]; df_prev["Baru"] = df_prev["no_va"].apply(replace_massal)
+                    st.dataframe(df_prev[["remark", "Lama", "Baru"]], use_container_width=False, hide_index=True)
 
-            if st.button("💾 Terapkan Massal", type="primary"):
-                df_updates = df_filtered.copy()
-                df_updates["no_va_baru"] = df_updates["no_va"].astype(str).apply(replace_massal)
-                df_updates = df_updates[df_updates["no_va"] != df_updates["no_va_baru"]].copy()
+                if st.button("💾 Terapkan Ganti Massal", type="primary", key="btn_ganti"):
+                    df_updates = df_filtered.copy()
+                    df_updates["no_va_baru"] = df_updates["no_va"].astype(str).apply(replace_massal)
+                    df_updates = df_updates[df_updates["no_va"] != df_updates["no_va_baru"]].copy()
+                    
+                    if not df_updates.empty:
+                        df_updates["prefix_va"] = df_updates["no_va_baru"].str[:2]
+                        df_updates["kode_sekolah"] = df_updates["no_va_baru"].str[-4:-2]
+                        df_updates["kode_bayar"] = df_updates["no_va_baru"].str[-2:]
+                        
+                        date_dt = pd.to_datetime(df_updates["date"], format="%d/%m/%Y", errors="coerce")
+                        tahun_awal = date_dt.dt.year.where(date_dt.dt.month >= 7, date_dt.dt.year - 1)
+                        tp_dari_tanggal = tahun_awal.astype(str) + "-" + (tahun_awal + 1).astype(str)
+                        
+                        prefix_digit = df_updates["prefix_va"].str.isdigit() & (df_updates["prefix_va"] != "00") & (df_updates["prefix_va"] != "")
+                        th_prefix = pd.to_numeric("20" + df_updates["prefix_va"], errors="coerce")
+                        
+                        df_updates["tahun_bayar"] = tp_dari_tanggal
+                        df_updates.loc[prefix_digit, "tahun_bayar"] = (
+                            th_prefix[prefix_digit].astype('Int64').astype(str) + "-" + 
+                            (th_prefix[prefix_digit] + 1).astype('Int64').astype(str)
+                        )
+                        
+                        bulan_dari_tanggal = date_dt.dt.month.apply(lambda m: m - 6 if m >= 7 else m + 6)
+                        df_updates["bulan_tp"] = bulan_dari_tanggal
+                        df_updates.loc[prefix_digit, "bulan_tp"] = 1
+                        
+                        with st.spinner("Menyimpan perubahan massal ke Cloud..."):
+                            db.update_no_va_bulk_vector(df_filtered, df_updates)
+                        st.success(f"✅ {len(df_updates)} data diubah secara instan!")
+                        st.cache_data.clear()
+                        st.rerun()
+
+            # ==========================================
+            # TAB 2: TAMBAH KARAKTER (Fitur Baru)
+            # ==========================================
+            with tab_tambah:
+                c1, c2, c3 = st.columns(3)
+                # Posisi masuknya karakter baru (1 = paling depan)
+                posisi_tambah = c1.number_input("Sisipkan di Karakter ke-", min_value=1, value=3, key="tambah_pos", help="Angka 1 berarti di paling depan.")
+                karakter_tambah = c2.text_input("Karakter yang ditambah", value="0", key="tambah_str", help="Bisa lebih dari 1 karakter, misal '00'.")
                 
-                if not df_updates.empty:
-                    df_updates["prefix_va"] = df_updates["no_va_baru"].str[:2]
-                    df_updates["kode_sekolah"] = df_updates["no_va_baru"].str[-4:-2]
-                    df_updates["kode_bayar"] = df_updates["no_va_baru"].str[-2:]
+                def insert_massal(no_va):
+                    no_va = str(no_va)
+                    start_idx = int(posisi_tambah) - 1
+                    # Jika posisi lebih besar dari panjang string, taruh di paling belakang
+                    if start_idx > len(no_va):
+                        start_idx = len(no_va)
+                    return no_va[:start_idx] + karakter_tambah + no_va[start_idx:]
                     
-                    date_dt = pd.to_datetime(df_updates["date"], format="%d/%m/%Y", errors="coerce")
-                    tahun_awal = date_dt.dt.year.where(date_dt.dt.month >= 7, date_dt.dt.year - 1)
-                    tp_dari_tanggal = tahun_awal.astype(str) + "-" + (tahun_awal + 1).astype(str)
+                if st.button("👀 Preview Tambah", key="prev_tambah"):
+                    df_prev = df_filtered.head(10).copy()
+                    df_prev["Lama"] = df_prev["no_va"]
+                    df_prev["Baru"] = df_prev["no_va"].apply(insert_massal)
+                    st.dataframe(df_prev[["remark", "Lama", "Baru"]], use_container_width=False, hide_index=True)
+
+                if st.button("💾 Terapkan Tambah Massal", type="primary", key="btn_tambah"):
+                    df_updates = df_filtered.copy()
+                    df_updates["no_va_baru"] = df_updates["no_va"].astype(str).apply(insert_massal)
+                    df_updates = df_updates[df_updates["no_va"] != df_updates["no_va_baru"]].copy()
                     
-                    prefix_digit = df_updates["prefix_va"].str.isdigit() & (df_updates["prefix_va"] != "00") & (df_updates["prefix_va"] != "")
-                    th_prefix = pd.to_numeric("20" + df_updates["prefix_va"], errors="coerce")
-                    
-                    df_updates["tahun_bayar"] = tp_dari_tanggal
-                    df_updates.loc[prefix_digit, "tahun_bayar"] = (
-                        th_prefix[prefix_digit].astype('Int64').astype(str) + "-" + 
-                        (th_prefix[prefix_digit] + 1).astype('Int64').astype(str)
-                    )
-                    
-                    bulan_dari_tanggal = date_dt.dt.month.apply(lambda m: m - 6 if m >= 7 else m + 6)
-                    df_updates["bulan_tp"] = bulan_dari_tanggal
-                    df_updates.loc[prefix_digit, "bulan_tp"] = 1
-                    
-                    with st.spinner("Menyimpan perubahan massal ke Cloud..."):
-                        db.update_no_va_bulk_vector(df_filtered, df_updates)
-                    st.success(f"✅ {len(df_updates)} data diubah secara instan!")
-                    st.rerun()
+                    if not df_updates.empty:
+                        df_updates["prefix_va"] = df_updates["no_va_baru"].str[:2]
+                        df_updates["kode_sekolah"] = df_updates["no_va_baru"].str[-4:-2]
+                        df_updates["kode_bayar"] = df_updates["no_va_baru"].str[-2:]
+                        
+                        date_dt = pd.to_datetime(df_updates["date"], format="%d/%m/%Y", errors="coerce")
+                        tahun_awal = date_dt.dt.year.where(date_dt.dt.month >= 7, date_dt.dt.year - 1)
+                        tp_dari_tanggal = tahun_awal.astype(str) + "-" + (tahun_awal + 1).astype(str)
+                        
+                        prefix_digit = df_updates["prefix_va"].str.isdigit() & (df_updates["prefix_va"] != "00") & (df_updates["prefix_va"] != "")
+                        th_prefix = pd.to_numeric("20" + df_updates["prefix_va"], errors="coerce")
+                        
+                        df_updates["tahun_bayar"] = tp_dari_tanggal
+                        df_updates.loc[prefix_digit, "tahun_bayar"] = (
+                            th_prefix[prefix_digit].astype('Int64').astype(str) + "-" + 
+                            (th_prefix[prefix_digit] + 1).astype('Int64').astype(str)
+                        )
+                        
+                        bulan_dari_tanggal = date_dt.dt.month.apply(lambda m: m - 6 if m >= 7 else m + 6)
+                        df_updates["bulan_tp"] = bulan_dari_tanggal
+                        df_updates.loc[prefix_digit, "bulan_tp"] = 1
+                        
+                        with st.spinner("Menyimpan perubahan massal ke Cloud..."):
+                            db.update_no_va_bulk_vector(df_filtered, df_updates)
+                        st.success(f"✅ {len(df_updates)} data ditambahi karakter secara instan!")
+                        st.cache_data.clear()
+                        st.rerun()
 
         st.divider()
         
