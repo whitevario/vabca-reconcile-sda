@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import json
+from datetime import datetime
 
 import db
 from parser import parse_txt_content, nama_bulan_tp
@@ -31,11 +33,18 @@ if not email_user.endswith("@yohannesgabriel.org"):
         st.logout()
     st.stop()
 
+# --- ADMIN GATE ---
+ADMIN_EMAILS = {
+    "staff.perpajakan1@yohannesgabriel.org",
+}
+is_admin = email_user.lower() in ADMIN_EMAILS
+
 with st.sidebar:
     st.write(f"Login sebagai: **{email_user}**")
+    if is_admin:
+        st.caption("🔑 Role: Admin")
     if st.button("Logout"):
         st.logout()
-
 st.markdown(
     """
     <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 20px;">
@@ -855,11 +864,133 @@ def render_master():
         st.success("✅ Tersimpan.")
         st.rerun()
 
+@st.fragment
+def render_backup():
+    st.subheader("💾 Backup & Restore")
+
+    if not is_admin:
+        st.error("🔒 Fitur ini hanya untuk Admin.")
+        return
+
+    df_trx = db.load_all_transaksi()
+    df_log = db.get_all_log_files()
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Baris Transaksi", f"{len(df_trx):,}")
+    c2.metric("File Terupload", f"{len(df_log):,}")
+    c3.metric("Ukuran DB", f"{db.get_db_size_mb():.2f} MB")
+
+    st.divider()
+
+    # ---- EXPORT ----
+    st.markdown("### 📤 Buat Backup")
+    st.info("Backup mencakup: transaksi, upload_log, master sekolah/bayar/kategori, dan alias.")
+
+    if st.button("💾 Generate File Backup", type="primary", key="btn_backup"):
+        with st.spinner("Mengambil seluruh data..."):
+            try:
+                backup_bytes = db.export_backup()
+                st.session_state["backup_bytes"] = backup_bytes
+                st.session_state["backup_name"] = f"vabca_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+                st.success(f"✅ Backup siap ({len(backup_bytes)/1024:.1f} KB).")
+            except Exception as e:
+                st.error(f"❌ Gagal: {e}")
+
+    if st.session_state.get("backup_bytes"):
+        st.download_button(
+            label="⬇️ Unduh File Backup",
+            data=st.session_state["backup_bytes"],
+            file_name=st.session_state["backup_name"],
+            mime="application/json",
+            key="dl_backup",
+        )
+
+    st.divider()
+
+    # ---- IMPORT ----
+    st.markdown("### 📥 Import Backup")
+    st.warning("Mode **Replace** menghapus semua lalu restore. Mode **Merge** hanya menambah/menimpa.")
+
+    up_backup = st.file_uploader("Upload file backup (.json)", type=["json"], key="up_backup")
+
+    if up_backup:
+        try:
+            payload = json.loads(up_backup.getvalue().decode("utf-8"))
+            meta = payload.get("meta", {})
+            data = payload.get("data", {})
+
+            st.success("✅ File backup terbaca.")
+            with st.expander("📋 Preview Isi", expanded=True):
+                st.write(f"**Dibuat:** {meta.get('exported_at', '-')}")
+                preview = [{"Tabel": t, "Baris": len(data.get(t, []))} for t in data]
+                st.dataframe(pd.DataFrame(preview), hide_index=True, use_container_width=False)
+
+            mode = st.radio(
+                "Mode Import:",
+                ["replace", "merge"],
+                format_func=lambda x: {
+                    "replace": "🔄 Replace — hapus semua lalu restore",
+                    "merge": "➕ Merge — tambah/timpa tanpa hapus",
+                }[x],
+                key="mode_import",
+            )
+
+            konfirmasi = st.checkbox("Saya mengerti risikonya.", key="konfirm_import")
+
+            if st.button("🚀 Jalankan Import", type="primary", disabled=not konfirmasi, key="btn_import"):
+                with st.spinner(f"Mengimpor (mode {mode})..."):
+                    try:
+                        summary = db.import_backup(payload, mode=mode)
+                        total = sum(v for v in summary.values() if isinstance(v, int))
+                        st.success(f"✅ Import selesai. {total:,} baris dipulihkan.")
+                        st.dataframe(
+                            pd.DataFrame([{"Tabel": k, "Baris": v} for k, v in summary.items()]),
+                            hide_index=True, use_container_width=False,
+                        )
+                        st.session_state.pop("backup_bytes", None)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Import gagal: {e}")
+        except Exception as e:
+            st.error(f"❌ File tidak valid: {e}")
+
+    st.divider()
+
+    # ---- HAPUS TRANSAKSI SAJA ----
+    st.markdown("### 🗑️ Hapus Data Transaksi")
+    st.error(
+        "⚠️ **PERINGATAN:** Aksi ini menghapus **seluruh transaksi dan log upload**. "
+        "**Master data (sekolah, bayar, kategori, alias) TIDAK dihapus.** "
+        "Lakukan backup terlebih dahulu!"
+    )
+
+    with st.expander("🔓 Buka Panel Hapus"):
+        st.write("Ketik **HAPUS TRANSAKSI** untuk mengaktifkan tombol.")
+        teks = st.text_input("Konfirmasi:", key="konfirm_hapus_trx")
+        cek = st.checkbox("Saya sudah backup dan yakin.", key="cek_hapus_trx")
+
+        if st.button(
+            "🗑️ HAPUS SEMUA TRANSAKSI",
+            type="primary",
+            disabled=(teks != "HAPUS TRANSAKSI" or not cek),
+            key="btn_hapus_trx",
+        ):
+            with st.spinner("Menghapus transaksi..."):
+                try:
+                    summary = db.delete_transaksi_saja()
+                    st.success("✅ Transaksi dan log upload berhasil dihapus.")
+                    st.dataframe(
+                        pd.DataFrame([{"Tabel": k, "Status": v} for k, v in summary.items()]),
+                        hide_index=True, use_container_width=False,
+                    )
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Gagal: {e}")
+
 # ============================================================
 # EKSEKUSI TAB
 # ============================================================
-tab_upload, tab_dashboard, tab_laporan, tab_rekon, tab_edit, tab_master = st.tabs(
-    ["📤 Upload", "📊 Dashboard", "📈 Laporan", "⚖️ Rekon", "✏️ Edit", "⚙️ Master"]
+tab_upload, tab_dashboard, tab_laporan, tab_rekon, tab_edit, tab_master, tab_backup = st.tabs(
+    ["📤 Upload", "📊 Dashboard", "📈 Laporan", "⚖️ Rekon", "✏️ Edit", "⚙️ Master", "💾 Backup"]
 )
 
 with tab_upload:
@@ -879,3 +1010,6 @@ with tab_edit:
 
 with tab_master:
     render_master()
+
+with tab_backup:
+    render_backup()
