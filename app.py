@@ -39,8 +39,8 @@ with st.sidebar:
 st.markdown(
     """
     <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 20px;">
-        <img src="https://raw.githubusercontent.com/whitevario/vabca-reconcile/main/maskot.png" width="60">
-        <h1 style="margin: 0; padding: 0; color: #2c3e50;">VABCA Reconcile PWK SIDOARJO</h1>
+        <img src="https://raw.githubusercontent.com/whitevario/vabca-reconcile-sda/main/maskot.png" width="60">
+        <h1 style="margin: 0; padding: 0; color: #2c3e50;">VABCA Reconcile PWK SIDOARJO</h1>https://github.com/whitevario/vabca-reconcile-sda/blob/main/app.py
     </div>
     """,
     unsafe_allow_html=True
