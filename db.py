@@ -38,7 +38,7 @@ def get_db_size_mb() -> float:
 # ==========================================
 # FUNGSI BACA DATA
 # ==========================================
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=3600)
 def load_all_transaksi() -> pd.DataFrame:
     supabase = get_supabase()
     all_data = []
