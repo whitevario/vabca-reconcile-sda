@@ -205,3 +205,133 @@ def get_detail_bank(bulan: str, kode_sekolah: str, kode_bayar: str) -> pd.DataFr
 
 def get_detail_pic(df_pic_asli: pd.DataFrame, kode_sekolah: str, kode_bayar: str) -> pd.DataFrame:
     return df_pic_asli[(df_pic_asli["kode_sekolah"] == kode_sekolah) & (df_pic_asli["kode_bayar"] == kode_bayar)]
+
+# ==========================================
+# BACKUP, RESTORE, DAN HAPUS DATA
+# ==========================================
+import json
+
+# Tabel yang di-backup (urutan restore: master dulu, transaksi belakangan)
+BACKUP_TABLES = [
+    "master_sekolah",
+    "master_bayar",
+    "master_kategori",
+    "master_alias_sekolah",
+    "master_alias_bayar",
+    "upload_log",
+    "transaksi",
+]
+
+TABLE_PK = {
+    "master_sekolah": "kode",
+    "master_bayar": "kode",
+    "master_kategori": "prefix_va",
+    "master_alias_sekolah": "kode_bank",
+    "master_alias_bayar": "kode_bank",
+    "upload_log": "file_name",
+    "transaksi": "id",
+}
+
+
+def _fetch_all_rows(supabase, table: str, batch: int = 1000) -> list:
+    all_rows = []
+    start = 0
+    while True:
+        resp = supabase.table(table).select("*").range(start, start + batch - 1).execute()
+        if not resp.data:
+            break
+        all_rows.extend(resp.data)
+        if len(resp.data) < batch:
+            break
+        start += batch
+    return all_rows
+
+
+def export_backup() -> bytes:
+    """Export seluruh database ke bytes JSON."""
+    supabase = get_supabase()
+    payload = {
+        "meta": {
+            "app": "VABCA Reconcile",
+            "version": 1,
+            "exported_at": datetime.now().isoformat(timespec="seconds"),
+            "tables": BACKUP_TABLES,
+        },
+        "data": {},
+    }
+    for table in BACKUP_TABLES:
+        payload["data"][table] = _fetch_all_rows(supabase, table)
+    return json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+
+
+def import_backup(payload: dict, mode: str = "replace") -> dict:
+    """
+    Restore database dari payload JSON.
+    mode:
+      - "replace" : hapus semua isi tabel lalu insert dari backup
+      - "merge"   : upsert tanpa menghapus data lama
+    """
+    supabase = get_supabase()
+    data = payload.get("data", {})
+    summary = {}
+
+    if not isinstance(data, dict) or not data:
+        raise ValueError("File backup tidak valid: tidak ada key 'data'.")
+
+    # Kosongkan dulu jika replace (urutan terbalik)
+    if mode == "replace":
+        for table in reversed(BACKUP_TABLES):
+            pk = TABLE_PK.get(table, "id")
+            try:
+                supabase.table(table).delete().neq(pk, "__never__").execute()
+            except Exception as e:
+                raise RuntimeError(f"Gagal mengosongkan tabel {table}: {e}")
+
+    # Insert per tabel (urutan normal)
+    for table in BACKUP_TABLES:
+        rows = data.get(table, [])
+        if not rows:
+            summary[table] = 0
+            continue
+
+        clean_rows = []
+        for r in rows:
+            clean_rows.append({k: (None if v == "" else v) for k, v in r.items()})
+
+        chunk = 500
+        total = 0
+        for i in range(0, len(clean_rows), chunk):
+            part = clean_rows[i:i + chunk]
+            try:
+                if mode == "merge":
+                    supabase.table(table).upsert(part).execute()
+                else:
+                    supabase.table(table).insert(part).execute()
+                total += len(part)
+            except Exception as e:
+                raise RuntimeError(f"Gagal import tabel {table} (baris {i}-{i+len(part)}): {e}")
+        summary[table] = total
+
+    st.cache_data.clear()
+    return summary
+
+
+def delete_transaksi_saja() -> dict:
+    """
+    Hapus HANYA transaksi dan upload_log.
+    Master data (sekolah, bayar, kategori, alias) TETAP AMAN.
+    """
+    supabase = get_supabase()
+    summary = {}
+
+    # Hapus transaksi dulu, lalu log
+    for table in ["transaksi", "upload_log"]:
+        pk = TABLE_PK.get(table, "id")
+        try:
+            supabase.table(table).delete().neq(pk, "__never__").execute()
+            summary[table] = "dikosongkan"
+        except Exception as e:
+            summary[table] = f"GAGAL: {e}"
+
+    st.cache_data.clear()
+    return summary
