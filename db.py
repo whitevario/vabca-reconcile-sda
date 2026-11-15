@@ -60,10 +60,14 @@ def load_all_transaksi() -> pd.DataFrame:
 @st.cache_data(ttl=3600)
 def get_list_bulan() -> list:
     supabase = get_supabase()
-    response = supabase.table("transaksi").select("bulan").execute()
-    df = pd.DataFrame(response.data)
-    if df.empty: return []
-    return sorted(df["bulan"].dropna().unique().tolist(), reverse=True)
+    try:
+        # Memanggil fungsi RPC yang baru kita buat di Supabase
+        response = supabase.rpc("get_unique_bulan").execute()
+        # Mengambil hasilnya dan memastikan formatnya berupa list
+        return [r["bulan"] for r in response.data]
+    except Exception as e:
+        st.error(f"Gagal memuat daftar bulan: {e}")
+        return []
 
 @st.cache_data(ttl=3600)
 def get_existing_files() -> set[str]:
