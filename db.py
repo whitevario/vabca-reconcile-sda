@@ -1,10 +1,12 @@
-import sqlite3
 import hashlib
 from datetime import datetime
-from pathlib import Path
 import pandas as pd
 import streamlit as st
 from supabase import create_client, Client
+import sqlite3
+import tempfile
+import os
+import json
 
 # ==========================================
 # KONFIGURASI SUPABASE
@@ -206,12 +208,11 @@ def get_detail_bank(bulan: str, kode_sekolah: str, kode_bayar: str) -> pd.DataFr
 def get_detail_pic(df_pic_asli: pd.DataFrame, kode_sekolah: str, kode_bayar: str) -> pd.DataFrame:
     return df_pic_asli[(df_pic_asli["kode_sekolah"] == kode_sekolah) & (df_pic_asli["kode_bayar"] == kode_bayar)]
 
-# ==========================================
-# BACKUP, RESTORE, DAN HAPUS DATA
-# ==========================================
-import json
 
-# Tabel yang di-backup (urutan restore: master dulu, transaksi belakangan)
+# ==========================================
+# BACKUP, RESTORE, KONVERSI, DAN HAPUS
+# ==========================================
+
 BACKUP_TABLES = [
     "master_sekolah",
     "master_bayar",
@@ -232,6 +233,21 @@ TABLE_PK = {
     "transaksi": "id",
 }
 
+DELETE_SENTINEL = {
+    "master_sekolah":        "__never__",
+    "master_bayar":          "__never__",
+    "master_kategori":       "__never__",
+    "master_alias_sekolah":  "__never__",
+    "master_alias_bayar":    "__never__",
+    "upload_log":            "__never__",
+    "transaksi":             0, 
+}
+
+COLUMN_MAPPING = {
+    # Sesuaikan jika nama kolom di file .db lama berbeda
+    # "transaksi": {"tanggal": "date"}
+}
+
 
 def _fetch_all_rows(supabase, table: str, batch: int = 1000) -> list:
     all_rows = []
@@ -245,6 +261,16 @@ def _fetch_all_rows(supabase, table: str, batch: int = 1000) -> list:
             break
         start += batch
     return all_rows
+
+
+def _clear_table(supabase, table: str):
+    """Kosongkan tabel dengan type-safe (bigint vs text)."""
+    pk = TABLE_PK.get(table, "id")
+    if table == "transaksi":
+        supabase.table(table).delete().gte(pk, 1).execute()
+    else:
+        sentinel = DELETE_SENTINEL.get(table, "__never__")
+        supabase.table(table).delete().neq(pk, sentinel).execute()
 
 
 def export_backup() -> bytes:
@@ -265,12 +291,7 @@ def export_backup() -> bytes:
 
 
 def import_backup(payload: dict, mode: str = "replace") -> dict:
-    """
-    Restore database dari payload JSON.
-    mode:
-      - "replace" : hapus semua isi tabel lalu insert dari backup
-      - "merge"   : upsert tanpa menghapus data lama
-    """
+    """Restore database dari payload JSON."""
     supabase = get_supabase()
     data = payload.get("data", {})
     summary = {}
@@ -278,16 +299,13 @@ def import_backup(payload: dict, mode: str = "replace") -> dict:
     if not isinstance(data, dict) or not data:
         raise ValueError("File backup tidak valid: tidak ada key 'data'.")
 
-    # Kosongkan dulu jika replace (urutan terbalik)
     if mode == "replace":
         for table in reversed(BACKUP_TABLES):
-            pk = TABLE_PK.get(table, "id")
             try:
-                supabase.table(table).delete().neq(pk, "__never__").execute()
+                _clear_table(supabase, table)
             except Exception as e:
                 raise RuntimeError(f"Gagal mengosongkan tabel {table}: {e}")
 
-    # Insert per tabel (urutan normal)
     for table in BACKUP_TABLES:
         rows = data.get(table, [])
         if not rows:
@@ -317,21 +335,88 @@ def import_backup(payload: dict, mode: str = "replace") -> dict:
 
 
 def delete_transaksi_saja() -> dict:
-    """
-    Hapus HANYA transaksi dan upload_log.
-    Master data (sekolah, bayar, kategori, alias) TETAP AMAN.
-    """
+    """Hapus HANYA transaksi dan upload_log."""
     supabase = get_supabase()
     summary = {}
 
-    # Hapus transaksi dulu, lalu log
     for table in ["transaksi", "upload_log"]:
-        pk = TABLE_PK.get(table, "id")
         try:
-            supabase.table(table).delete().neq(pk, "__never__").execute()
+            _clear_table(supabase, table)
             summary[table] = "dikosongkan"
         except Exception as e:
             summary[table] = f"GAGAL: {e}"
 
     st.cache_data.clear()
     return summary
+
+
+def preview_sqlite_backup(file_bytes: bytes) -> dict:
+    """Baca file .db dan kembalikan info preview."""
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".db")
+    try:
+        with os.fdopen(tmp_fd, "wb") as f:
+            f.write(file_bytes)
+
+        conn = sqlite3.connect(tmp_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = [r[0] for r in cursor.fetchall()]
+
+        info = {}
+        for t in tables:
+            try:
+                n = pd.read_sql_query(f"SELECT COUNT(*) AS n FROM {t}", conn).iloc[0]["n"]
+                cursor.execute(f"PRAGMA table_info({t})")
+                cols = [r[1] for r in cursor.fetchall()]
+                info[t] = {"baris": int(n), "kolom": cols}
+            except Exception as e:
+                info[t] = {"baris": 0, "kolom": [], "error": str(e)}
+        conn.close()
+        return info
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
+def convert_sqlite_to_json_payload(file_bytes: bytes) -> dict:
+    """Baca .db, kembalikan payload JSON (TIDAK menyentuh Supabase)."""
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".db")
+    try:
+        with os.fdopen(tmp_fd, "wb") as f:
+            f.write(file_bytes)
+
+        conn = sqlite3.connect(tmp_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables_in_db = {r[0] for r in cursor.fetchall()}
+
+        payload = {
+            "meta": {
+                "app": "VABCA Reconcile",
+                "version": 1,
+                "exported_at": datetime.now().isoformat(timespec="seconds"),
+                "converted_from_sqlite": True,
+                "tables": BACKUP_TABLES,
+            },
+            "data": {},
+        }
+
+        for table in BACKUP_TABLES:
+            if table not in tables_in_db:
+                payload["data"][table] = []
+                continue
+            df = pd.read_sql_query(f'SELECT * FROM "{table}"', conn)
+            if df.empty:
+                payload["data"][table] = []
+                continue
+
+            df = df.astype(object).where(pd.notna(df), None)
+            if table == "transaksi" and "id" in df.columns:
+                df = df.drop(columns=["id"])
+            payload["data"][table] = df.to_dict(orient="records")
+
+        conn.close()
+        return payload
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
