@@ -598,56 +598,78 @@ def render_emergency_fix():
     st.warning("🚨 **PANEL DARURAT:** Memperbaiki NO.VA yang tidak sengaja ditambahi karakter di depan.")
     df = enrich_df(db.load_all_transaksi())
     
-    # Filter: Hanya ambil NO.VA yang panjangnya pas 13 digit (karena kelebihan 2 karakter)
-    df_error = df[df["no_va"].astype(str).str.len() == 13].copy()
-    
-    if df_error.empty:
-        st.success("✅ Tidak ada data dengan panjang 13 digit. Data Anda mungkin aman.")
+    if df.empty:
         return
 
-    st.write(f"Ditemukan **{len(df_error)} baris** data dengan NO.VA 13 digit (kemungkinan besar ini adalah data yang salah).")
+    # Ambil 100 data terbaru untuk dipindai
+    df_terbaru = df.head(100).copy()
     
-    # Preview 10 baris pertama sebelum dipotong
+    # Filter: NO.VA panjangnya 13 digit (kelebihan 2 karakter dari aslinya 11)
+    df_error = df_terbaru[df_terbaru["no_va"].astype(str).str.len() == 13].copy()
+    
+    if df_error.empty:
+        st.info("✅ Tidak ditemukan data 13 digit di 100 transaksi terbaru.")
+        return
+
+    st.error(f"Ditemukan **{len(df_error)} baris** data 13 digit di transaksi terbaru Anda.")
+    
     st.markdown("**Preview 10 data pertama (Sebelum diperbaiki):**")
-    st.dataframe(df_error[["remark", "no_va", "credit"]].head(10), hide_index=True)
+    st.dataframe(df_error[["id", "date", "remark", "no_va", "credit"]].head(10), hide_index=True)
     
-    # Cek apakah karakter depan adalah '0' atau '00'
     st.markdown("---")
-    st.write("Aksi: **Potong 2 karakter paling depan** dari NO.VA yang berjumlah 13 digit ini.")
     
     if st.button("🚑 PERBAIKI SEKARANG (Potong 2 Karakter Depan)", type="primary"):
-        df_updates = df_error.copy()
+        supabase = db.get_supabase()
+        berhasil = 0
         
-        # 1. Potong 2 karakter depan
-        df_updates["no_va_baru"] = df_updates["no_va"].astype(str).str[2:]
+        progress_bar = st.progress(0)
+        status_text = st.empty()
         
-        # 2. Hitung ulang prefix, kode sekolah, kode bayar
-        df_updates["prefix_va"] = df_updates["no_va_baru"].str[:2]
-        df_updates["kode_sekolah"] = df_updates["no_va_baru"].str[-4:-2]
-        df_updates["kode_bayar"] = df_updates["no_va_baru"].str[-2:]
-        
-        # 3. Hitung ulang tahun & bulan (sama seperti parser aslinya)
-        date_dt = pd.to_datetime(df_updates["date"], format="%d/%m/%Y", errors="coerce")
-        tahun_awal = date_dt.dt.year.where(date_dt.dt.month >= 7, date_dt.dt.year - 1)
-        tp_dari_tanggal = tahun_awal.astype(str) + "-" + (tahun_awal + 1).astype(str)
-        
-        prefix_digit = df_updates["prefix_va"].str.isdigit() & (df_updates["prefix_va"] != "00") & (df_updates["prefix_va"] != "")
-        th_prefix = pd.to_numeric("20" + df_updates["prefix_va"], errors="coerce")
-        
-        df_updates["tahun_bayar"] = tp_dari_tanggal
-        df_updates.loc[prefix_digit, "tahun_bayar"] = (
-            th_prefix[prefix_digit].astype('Int64').astype(str) + "-" + 
-            (th_prefix[prefix_digit] + 1).astype('Int64').astype(str)
-        )
-        
-        bulan_dari_tanggal = date_dt.dt.month.apply(lambda m: m - 6 if m >= 7 else m + 6)
-        df_updates["bulan_tp"] = bulan_dari_tanggal
-        df_updates.loc[prefix_digit, "bulan_tp"] = 1
-        
-        with st.spinner("Memperbaiki data di Cloud..."):
-            db.update_no_va_bulk_vector(df, df_updates)
-        
-        st.success(f"✅ Berhasil memperbaiki {len(df_updates)} data! Silakan cek tabel di bawah.")
+        for i, row in enumerate(df_error.itertuples()):
+            # 1. Potong 2 karakter terdepan
+            no_va_bersih = str(row.no_va)[2:]
+            
+            # 2. Hitung ulang variabel turunannya
+            prefix_va = no_va_bersih[:2]
+            kode_sekolah = no_va_bersih[-4:-2]
+            kode_bayar = no_va_bersih[-2:]
+            
+            # 3. Hitung ulang tahun_bayar dan bulan_tp
+            try:
+                # Ubah format tanggal string ke datetime
+                tanggal = pd.to_datetime(row.date, format="%d/%m/%Y")
+                tahun_awal = tanggal.year if tanggal.month >= 7 else tanggal.year - 1
+                
+                if prefix_va.isdigit() and prefix_va != "00":
+                    th_prefix = int("20" + prefix_va)
+                    tahun_bayar = f"{th_prefix}-{th_prefix + 1}"
+                    bulan_tp = 1
+                else:
+                    tahun_bayar = f"{tahun_awal}-{tahun_awal + 1}"
+                    bulan_tp = tanggal.month - 6 if tanggal.month >= 7 else tanggal.month + 6
+            except:
+                tahun_bayar = row.tahun_bayar
+                bulan_tp = row.bulan_tp
+
+            # 4. Update langsung ke Supabase berdasarkan ID
+            try:
+                supabase.table("transaksi").update({
+                    "no_va": no_va_bersih,
+                    "prefix_va": prefix_va,
+                    "kode_sekolah": kode_sekolah,
+                    "kode_bayar": kode_bayar,
+                    "tahun_bayar": tahun_bayar,
+                    "bulan_tp": bulan_tp
+                }).eq("id", row.id).execute()
+                berhasil += 1
+            except Exception as e:
+                st.error(f"Gagal update ID {row.id}: {e}")
+
+            # Update progress bar
+            progress_bar.progress((i + 1) / len(df_error))
+            status_text.text(f"Memproses {i + 1} dari {len(df_error)} data...")
+
+        st.success(f"✅ Berhasil memperbaiki {berhasil} data langsung di database!")
         st.cache_data.clear()
         st.rerun()
 
