@@ -596,33 +596,62 @@ def render_rekon():
 
 @st.fragment
 def render_edit():
-    st.subheader("✏️ Edit Data (Koreksi NO.VA)")
+    # --- INISIALISASI VERSI EDITOR (Agar tabel langsung terupdate) ---
+    if "edit_ver" not in st.session_state:
+        st.session_state.edit_ver = 0
+
+    col_title, col_btn = st.columns([4, 1])
+    with col_title:
+        st.subheader("✏️ Edit Data (Koreksi NO.VA)")
+    with col_btn:
+        if st.button("🔄 Refresh Data", use_container_width=True):
+            st.session_state.edit_ver += 1
+            st.cache_data.clear()
+            st.rerun()
+
     df_edit = enrich_df(db.load_all_transaksi())
     
     if not df_edit.empty:
         df_filtered = apply_filters_edit(df_edit, key_prefix="edit")
         
-        with st.expander("🛠️ Ganti Karakter Massal"):    
-            tab_ganti, tab_tambah = st.tabs(["🔄 Ganti Karakter", "➕ Tambah Karakter"])
+        # Validasi limit baris
+        if len(df_filtered) > 1000:
+            st.warning(f"⚠️ Menampilkan {len(df_filtered):,} baris bisa membuat browser lambat. Mohon persempit filter hingga di bawah 1000 baris.")
+            st.stop()
+
+        # =========================================================
+        # EXPANDER MANIPULASI MASSAL (GANTI/HAPUS & TAMBAH)
+        # =========================================================
+        with st.expander("🛠️ Manipulasi Karakter Massal"):
+            tab_ganti, tab_tambah = st.tabs(["🔄 Ganti / Hapus Karakter", "➕ Tambah Karakter"])
             
-            # ==========================================
-            # TAB 1: GANTI KARAKTER (Fitur Lama)
-            # ==========================================
+            # -- TAB 1: GANTI / HAPUS KARAKTER --
             with tab_ganti:
                 c1, c2, c3 = st.columns(3)
                 posisi = c1.number_input("Karakter ke-", min_value=1, value=3, key="ganti_pos")
-                jml_karakter = c2.number_input("Jumlah diganti", min_value=1, value=2, key="ganti_jml")
-                pengganti = c3.text_input("Diganti jadi", value="00", key="ganti_str")
+                jml_karakter = c2.number_input("Jumlah diganti/dihapus", min_value=1, value=2, key="ganti_jml")
+                pengganti = c3.text_input(
+                    "Diganti jadi", 
+                    value="00", 
+                    key="ganti_str",
+                    help="Kosongkan kolom ini jika ingin MENGHAPUS karakter tersebut."
+                )
                 
                 def replace_massal(no_va):
-                    no_va = str(no_va); start_idx = int(posisi) - 1; end_idx = start_idx + int(jml_karakter)
-                    return no_va[:start_idx] + pengganti + no_va[end_idx:]
+                    no_va = str(no_va)
+                    start_idx = int(posisi) - 1
+                    end_idx = start_idx + int(jml_karakter)
+                    str_pengganti = pengganti if pengganti is not None else ""
+                    return no_va[:start_idx] + str_pengganti + no_va[end_idx:]
                     
-                if st.button("👀 Preview Ganti", key="prev_ganti"):
-                    df_prev = df_filtered.head(10).copy(); df_prev["Lama"] = df_prev["no_va"]; df_prev["Baru"] = df_prev["no_va"].apply(replace_massal)
-                    st.dataframe(df_prev[["remark", "Lama", "Baru"]], use_container_width=False, hide_index=True)
+                if st.button("👀 Preview Ganti/Hapus", key="prev_ganti"):
+                    df_prev = df_filtered.head(10).copy()
+                    df_prev["Lama"] = df_prev["no_va"]
+                    df_prev["Baru"] = df_prev["no_va"].apply(replace_massal)
+                    df_prev["Status"] = df_prev.apply(lambda r: "Berubah" if r["Lama"] != r["Baru"] else "Sama", axis=1)
+                    st.dataframe(df_prev[["remark", "Lama", "Baru", "Status"]], use_container_width=False, hide_index=True)
 
-                if st.button("💾 Terapkan Ganti Massal", type="primary", key="btn_ganti"):
+                if st.button("💾 Terapkan Ganti/Hapus Massal", type="primary", key="btn_ganti"):
                     df_updates = df_filtered.copy()
                     df_updates["no_va_baru"] = df_updates["no_va"].astype(str).apply(replace_massal)
                     df_updates = df_updates[df_updates["no_va"] != df_updates["no_va_baru"]].copy()
@@ -651,73 +680,79 @@ def render_edit():
                         
                         with st.spinner("Menyimpan perubahan massal ke Cloud..."):
                             db.update_no_va_bulk_vector(df_filtered, df_updates)
-                        st.success(f"✅ {len(df_updates)} data diubah secara instan!")
+                        st.success(f"✅ {len(df_updates)} data diubah/dihapus secara instan!")
+                        
+                        st.session_state.edit_ver += 1  # Paksa reload tabel
                         st.cache_data.clear()
                         st.rerun()
 
-            # ==========================================
-            # TAB 2: TAMBAH KARAKTER (Fitur Baru)
-            # ==========================================
+            # -- TAB 2: TAMBAH KARAKTER --
             with tab_tambah:
                 c1, c2, c3 = st.columns(3)
-                # Posisi masuknya karakter baru (1 = paling depan)
                 posisi_tambah = c1.number_input("Sisipkan di Karakter ke-", min_value=1, value=3, key="tambah_pos", help="Angka 1 berarti di paling depan.")
                 karakter_tambah = c2.text_input("Karakter yang ditambah", value="0", key="tambah_str", help="Bisa lebih dari 1 karakter, misal '00'.")
                 
                 def insert_massal(no_va):
                     no_va = str(no_va)
                     start_idx = int(posisi_tambah) - 1
-                    # Jika posisi lebih besar dari panjang string, taruh di paling belakang
                     if start_idx > len(no_va):
                         start_idx = len(no_va)
                     return no_va[:start_idx] + karakter_tambah + no_va[start_idx:]
                     
                 if st.button("👀 Preview Tambah", key="prev_tambah"):
-                    df_prev = df_filtered.head(10).copy()
-                    df_prev["Lama"] = df_prev["no_va"]
-                    df_prev["Baru"] = df_prev["no_va"].apply(insert_massal)
-                    st.dataframe(df_prev[["remark", "Lama", "Baru"]], use_container_width=False, hide_index=True)
+                    if not karakter_tambah:
+                        st.warning("⚠️ Kolom 'Karakter yang ditambah' masih kosong. Isi dengan angka atau huruf yang ingin disisipkan.")
+                    else:
+                        df_prev = df_filtered.head(10).copy()
+                        df_prev["Lama"] = df_prev["no_va"]
+                        df_prev["Baru"] = df_prev["no_va"].apply(insert_massal)
+                        st.dataframe(df_prev[["remark", "Lama", "Baru"]], use_container_width=False, hide_index=True)
 
                 if st.button("💾 Terapkan Tambah Massal", type="primary", key="btn_tambah"):
-                    df_updates = df_filtered.copy()
-                    df_updates["no_va_baru"] = df_updates["no_va"].astype(str).apply(insert_massal)
-                    df_updates = df_updates[df_updates["no_va"] != df_updates["no_va_baru"]].copy()
-                    
-                    if not df_updates.empty:
-                        df_updates["prefix_va"] = df_updates["no_va_baru"].str[:2]
-                        df_updates["kode_sekolah"] = df_updates["no_va_baru"].str[-4:-2]
-                        df_updates["kode_bayar"] = df_updates["no_va_baru"].str[-2:]
+                    if not karakter_tambah:
+                        st.warning("⚠️ Proses dibatalkan. Kolom 'Karakter yang ditambah' tidak boleh kosong.")
+                    else:
+                        df_updates = df_filtered.copy()
+                        df_updates["no_va_baru"] = df_updates["no_va"].astype(str).apply(insert_massal)
+                        df_updates = df_updates[df_updates["no_va"] != df_updates["no_va_baru"]].copy()
                         
-                        date_dt = pd.to_datetime(df_updates["date"], format="%d/%m/%Y", errors="coerce")
-                        tahun_awal = date_dt.dt.year.where(date_dt.dt.month >= 7, date_dt.dt.year - 1)
-                        tp_dari_tanggal = tahun_awal.astype(str) + "-" + (tahun_awal + 1).astype(str)
-                        
-                        prefix_digit = df_updates["prefix_va"].str.isdigit() & (df_updates["prefix_va"] != "00") & (df_updates["prefix_va"] != "")
-                        th_prefix = pd.to_numeric("20" + df_updates["prefix_va"], errors="coerce")
-                        
-                        df_updates["tahun_bayar"] = tp_dari_tanggal
-                        df_updates.loc[prefix_digit, "tahun_bayar"] = (
-                            th_prefix[prefix_digit].astype('Int64').astype(str) + "-" + 
-                            (th_prefix[prefix_digit] + 1).astype('Int64').astype(str)
-                        )
-                        
-                        bulan_dari_tanggal = date_dt.dt.month.apply(lambda m: m - 6 if m >= 7 else m + 6)
-                        df_updates["bulan_tp"] = bulan_dari_tanggal
-                        df_updates.loc[prefix_digit, "bulan_tp"] = 1
-                        
-                        with st.spinner("Menyimpan perubahan massal ke Cloud..."):
-                            db.update_no_va_bulk_vector(df_filtered, df_updates)
-                        st.success(f"✅ {len(df_updates)} data ditambahi karakter secara instan!")
-                        st.cache_data.clear()
-                        st.rerun()
+                        if not df_updates.empty:
+                            df_updates["prefix_va"] = df_updates["no_va_baru"].str[:2]
+                            df_updates["kode_sekolah"] = df_updates["no_va_baru"].str[-4:-2]
+                            df_updates["kode_bayar"] = df_updates["no_va_baru"].str[-2:]
+                            
+                            date_dt = pd.to_datetime(df_updates["date"], format="%d/%m/%Y", errors="coerce")
+                            tahun_awal = date_dt.dt.year.where(date_dt.dt.month >= 7, date_dt.dt.year - 1)
+                            tp_dari_tanggal = tahun_awal.astype(str) + "-" + (tahun_awal + 1).astype(str)
+                            
+                            prefix_digit = df_updates["prefix_va"].str.isdigit() & (df_updates["prefix_va"] != "00") & (df_updates["prefix_va"] != "")
+                            th_prefix = pd.to_numeric("20" + df_updates["prefix_va"], errors="coerce")
+                            
+                            df_updates["tahun_bayar"] = tp_dari_tanggal
+                            df_updates.loc[prefix_digit, "tahun_bayar"] = (
+                                th_prefix[prefix_digit].astype('Int64').astype(str) + "-" + 
+                                (th_prefix[prefix_digit] + 1).astype('Int64').astype(str)
+                            )
+                            
+                            bulan_dari_tanggal = date_dt.dt.month.apply(lambda m: m - 6 if m >= 7 else m + 6)
+                            df_updates["bulan_tp"] = bulan_dari_tanggal
+                            df_updates.loc[prefix_digit, "bulan_tp"] = 1
+                            
+                            with st.spinner("Menyimpan perubahan massal ke Cloud..."):
+                                db.update_no_va_bulk_vector(df_filtered, df_updates)
+                            st.success(f"✅ {len(df_updates)} data ditambahi karakter secara instan!")
+                            
+                            st.session_state.edit_ver += 1  # Paksa reload tabel
+                            st.cache_data.clear()
+                            st.rerun()
 
         st.divider()
         
-        # Gunakan column_config di sini agar kolom "remark" lebar
+        # --- TABEL EDITOR ---
         edited_df = st.data_editor(
             df_filtered[["id", "date", "no_va", "remark", "credit", "tahun_bayar"]],
             disabled=["id", "date", "remark", "credit", "tahun_bayar"], 
-            key="editor_no_va", 
+            key=f"editor_no_va_{st.session_state.edit_ver}",  # Kunci dinamis agar terupdate
             use_container_width=False, 
             hide_index=True,
             column_config={
@@ -730,6 +765,7 @@ def render_edit():
             }
         )
         
+        # --- SIMPAN PERUBAHAN SATUAN ---
         if st.button("💾 Simpan Perubahan Satuan", type="primary"):
             df_merged = pd.merge(df_filtered[["id", "no_va"]], edited_df[["id", "no_va"]], on="id", suffixes=("_asli", "_baru"))
             df_changed = df_merged[df_merged["no_va_asli"] != df_merged["no_va_baru"]].copy()
@@ -762,11 +798,12 @@ def render_edit():
                 with st.spinner("Menyimpan ke Cloud..."):
                     db.update_no_va_bulk_vector(df_filtered, df_updates)
                 st.success(f"✅ {len(df_updates)} perubahan disimpan secara instan!")
+                
+                st.session_state.edit_ver += 1  # Paksa reload tabel
+                st.cache_data.clear()
                 st.rerun()
             else:
                 st.info("Tidak ada perubahan yang perlu disimpan.")
-
-
 @st.fragment
 def render_master():
     st.subheader("⚙️ Master Data")
