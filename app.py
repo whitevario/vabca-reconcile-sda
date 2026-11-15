@@ -45,11 +45,10 @@ with st.sidebar:
         st.caption("🔑 Role: Admin")
     if st.button("Logout"):
         st.logout()
-
 st.markdown(
     """
     <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 20px;">
-        <img src="https://raw.githubusercontent.com/whitevario/vabca-reconcile/main/maskot.png" width="60">
+        <img src="https://raw.githubusercontent.com/whitevario/vabca-reconcile-sda/main/maskot.png" width="60">
         <h1 style="margin: 0; padding: 0; color: #2c3e50;">VABCA Reconcile PWK SIDOARJO</h1>
     </div>
     """,
@@ -93,7 +92,7 @@ def apply_filters(df: pd.DataFrame, key_prefix: str) -> pd.DataFrame:
     if df.empty: return df
     st.markdown("#### 🔎 Filter Laporan")
     c1, c2, c3 = st.columns(3)
-    tp_opts = sorted(df["tahun_bayar"].dropna().unique(), reverse=True)
+    tp_opts = sorted(df["tahun_bayar"].dropna().unique())
     f_tp = c1.multiselect("TP (Tahun Bayar)", tp_opts, default=tp_opts, key=f"{key_prefix}_tp")
     comp_opts = sorted(df["company_code"].dropna().unique())
     f_comp = c2.multiselect("Company Code", comp_opts, default=comp_opts, key=f"{key_prefix}_comp")
@@ -112,17 +111,10 @@ def apply_filters(df: pd.DataFrame, key_prefix: str) -> pd.DataFrame:
 def apply_filters_edit(df: pd.DataFrame, key_prefix: str) -> pd.DataFrame:
     if df.empty: return df
     st.markdown("##### 🔎 Filter Data")
-    
-    # Urutkan opsi secara menurun (terbaru di atas)
-    tp_opts = sorted(df["tahun_bayar"].dropna().unique(), reverse=True)
-    bulan_opts = sorted(df["bulan"].dropna().unique(), reverse=True)
-    file_opts = sorted(df["asal_file"].dropna().unique(), reverse=True)
-    
     c1, c2, c3 = st.columns(3)
-    f_tp = c1.multiselect("TP (Tahun Bayar)", tp_opts, key=f"{key_prefix}_tp")
-    f_bulan = c2.multiselect("Bulan Transaksi", bulan_opts, key=f"{key_prefix}_bulan")
-    f_file = c3.multiselect("Asal File", file_opts, key=f"{key_prefix}_file")
-    
+    f_tp = c1.multiselect("TP (Tahun Bayar)", sorted(df["tahun_bayar"].dropna().unique()), key=f"{key_prefix}_tp")
+    f_bulan = c2.multiselect("Bulan Transaksi", sorted(df["bulan"].dropna().unique()), key=f"{key_prefix}_bulan")
+    f_file = c3.multiselect("Asal File", sorted(df["asal_file"].dropna().unique()), key=f"{key_prefix}_file")
     c4, c5, c6 = st.columns(3)
     f_kat = c4.multiselect("Kategori", sorted(df["prefix_va"].dropna().unique()), key=f"{key_prefix}_kat")
     f_sek = c5.multiselect("Kode Sekolah", sorted(df["kode_sekolah"].dropna().unique()), key=f"{key_prefix}_sek")
@@ -272,8 +264,8 @@ def render_laporan():
         
         with st.expander("🔎 Filter Global Laporan", expanded=True):
             col1, col2 = st.columns(2)
-            pilih_tp = col1.multiselect("Filter TP (Global)", sorted(df["tahun_bayar"].dropna().unique(), reverse=True))
-            pilih_file = col2.multiselect("Filter Asal File", sorted(df["asal_file"].dropna().unique(), reverse=True))
+            pilih_tp = col1.multiselect("Filter TP (Global)", sorted(df["tahun_bayar"].dropna().unique()))
+            pilih_file = col2.multiselect("Filter Asal File", sorted(df["asal_file"].dropna().unique()))
             if pilih_tp: df = df[df["tahun_bayar"].isin(pilih_tp)]
             if pilih_file: df = df[df["asal_file"].isin(pilih_file)]
             
@@ -284,7 +276,7 @@ def render_laporan():
         with sub_bank:
             df_bank = apply_filters(df, key_prefix="bank")
             if not df_bank.empty:
-                tbl_bulan = df_bank.groupby("bulan").agg(Nominal=("credit", "sum"), Transaksi=("no_va", "count"), VA_Unik=("no_va", "nunique")).reset_index().sort_values("bulan", ascending=False)
+                tbl_bulan = df_bank.groupby("bulan").agg(Nominal=("credit", "sum"), Transaksi=("no_va", "count"), VA_Unik=("no_va", "nunique")).reset_index().sort_values("bulan")
                 tbl_bulan_tampil = tbl_bulan.copy(); tbl_bulan_tampil["Nominal"] = tbl_bulan_tampil["Nominal"].apply(lambda x: format_rp(x))
                 
                 st.dataframe(
@@ -299,7 +291,7 @@ def render_laporan():
                     }
                 )
                 
-                pivot_bank = df_bank.pivot_table(index="bulan", columns="tahun_bayar", values="credit", aggfunc="sum", fill_value=0).sort_index(ascending=False)
+                pivot_bank = df_bank.pivot_table(index="bulan", columns="tahun_bayar", values="credit", aggfunc="sum", fill_value=0).sort_index()
                 pivot_bank["TOTAL"] = pivot_bank.sum(axis=1); pivot_bank.loc["TOTAL"] = pivot_bank.sum()
                 pivot_bank = pivot_bank.reset_index()
                 
@@ -315,7 +307,7 @@ def render_laporan():
         with sub_tp:
             df_tp = apply_filters(df, key_prefix="tp")
             if not df_tp.empty:
-                tbl_tp = df_tp.groupby("tahun_bayar").agg(Nominal=("credit", "sum"), Transaksi=("no_va", "count"), VA_Unik=("no_va", "nunique")).reset_index().sort_values("tahun_bayar", ascending=False)
+                tbl_tp = df_tp.groupby("tahun_bayar").agg(Nominal=("credit", "sum"), Transaksi=("no_va", "count"), VA_Unik=("no_va", "nunique")).reset_index().sort_values("tahun_bayar")
                 tbl_tp_tampil = tbl_tp.copy(); tbl_tp_tampil["Nominal"] = tbl_tp_tampil["Nominal"].apply(lambda x: format_rp(x))
                 
                 st.dataframe(
@@ -330,7 +322,7 @@ def render_laporan():
                     }
                 )
                 
-                pivot_tp = df_tp.pivot_table(index="tahun_bayar", columns="bulan_tp", values="credit", aggfunc="sum", fill_value=0).sort_index(ascending=False)
+                pivot_tp = df_tp.pivot_table(index="tahun_bayar", columns="bulan_tp", values="credit", aggfunc="sum", fill_value=0).sort_index()
                 pivot_tp.columns = [f"B{int(c)}" for c in pivot_tp.columns]
                 for i in range(1, 13):
                     if f"B{i}" not in pivot_tp.columns: pivot_tp[f"B{i}"] = 0
@@ -349,7 +341,7 @@ def render_laporan():
         with sub_sek_bayar:
             df_sb = apply_filters(df, key_prefix="sekbayar")
             if not df_sb.empty:
-                tp_pilih = st.selectbox("Pilih TP", options=["(Semua)"] + sorted(df_sb["tahun_bayar"].unique(), reverse=True))
+                tp_pilih = st.selectbox("Pilih TP", options=["(Semua)"] + sorted(df_sb["tahun_bayar"].unique()))
                 df_pivot = df_sb if tp_pilih == "(Semua)" else df_sb[df_sb["tahun_bayar"] == tp_pilih]
                 pivot_sb = df_pivot.pivot_table(index="nama_sekolah", columns="nama_bayar", values="credit", aggfunc="sum", fill_value=0)
                 pivot_sb["TOTAL"] = pivot_sb.sum(axis=1); pivot_sb = pivot_sb.sort_values("TOTAL", ascending=False); pivot_sb.loc["TOTAL"] = pivot_sb.sum()
@@ -604,24 +596,12 @@ def render_rekon():
 
 @st.fragment
 def render_edit():
-    col_title, col_btn = st.columns([4, 1])
-    with col_title:
-        st.subheader("✏️ Edit Data (Koreksi NO.VA)")
-    with col_btn:
-        if st.button("🔄 Refresh Data", use_container_width=True):
-            st.cache_data.clear()
-            st.rerun()
-
+    st.subheader("✏️ Edit Data (Koreksi NO.VA)")
     df_edit = enrich_df(db.load_all_transaksi())
     
     if not df_edit.empty:
         df_filtered = apply_filters_edit(df_edit, key_prefix="edit")
         
-        # --- VALIDASI LIMIT BARIS ---
-        if len(df_filtered) > 1000:
-            st.warning(f"⚠️ Menampilkan {len(df_filtered):,} baris bisa membuat browser lambat. Mohon persempit filter (misal: pilih Bulan atau Asal File tertentu) hingga di bawah 1000 baris.")
-            st.stop()
-
         with st.expander("🛠️ Ganti Karakter Massal"):
             c1, c2, c3 = st.columns(3)
             posisi = c1.number_input("Karakter ke-", min_value=1, value=3)
@@ -666,11 +646,11 @@ def render_edit():
                     with st.spinner("Menyimpan perubahan massal ke Cloud..."):
                         db.update_no_va_bulk_vector(df_filtered, df_updates)
                     st.success(f"✅ {len(df_updates)} data diubah secara instan!")
-                    st.cache_data.clear()
                     st.rerun()
 
         st.divider()
         
+        # Gunakan column_config di sini agar kolom "remark" lebar
         edited_df = st.data_editor(
             df_filtered[["id", "date", "no_va", "remark", "credit", "tahun_bayar"]],
             disabled=["id", "date", "remark", "credit", "tahun_bayar"], 
@@ -719,7 +699,6 @@ def render_edit():
                 with st.spinner("Menyimpan ke Cloud..."):
                     db.update_no_va_bulk_vector(df_filtered, df_updates)
                 st.success(f"✅ {len(df_updates)} perubahan disimpan secara instan!")
-                st.cache_data.clear()
                 st.rerun()
             else:
                 st.info("Tidak ada perubahan yang perlu disimpan.")
@@ -885,7 +864,6 @@ def render_master():
         st.success("✅ Tersimpan.")
         st.rerun()
 
-
 @st.fragment
 def render_backup():
     st.subheader("💾 Backup & Restore")
@@ -930,66 +908,45 @@ def render_backup():
 
     # ---- IMPORT ----
     st.markdown("### 📥 Import Backup")
-    st.warning("Mode **Replace** menghapus semua data transaksi+log lalu restore. Mode **Merge** hanya menambah/menimpa.")
+    st.warning("Mode **Replace** menghapus semua lalu restore. Mode **Merge** hanya menambah/menimpa.")
 
-    up_backup = st.file_uploader("Upload file backup (.json atau .db)", type=["json", "db"], key="up_backup")
+    up_backup = st.file_uploader("Upload file backup (.json)", type=["json"], key="up_backup")
 
     if up_backup:
-        is_sqlite = up_backup.name.lower().endswith(".db")
-        payload_json = None
-        file_bytes = up_backup.getvalue()
-
         try:
-            if is_sqlite:
-                info = db.preview_sqlite_backup(file_bytes)
-                st.success("✅ File .db terbaca.")
-                with st.expander("📋 Preview Isi File .db", expanded=True):
-                    rows = []
-                    for t, v in info.items():
-                        rows.append({
-                            "Tabel": t,
-                            "Baris": v["baris"],
-                            "Kolom": ", ".join(v["kolom"][:6]) + ("..." if len(v["kolom"]) > 6 else ""),
-                        })
-                    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
-            else:
-                payload_json = json.loads(file_bytes.decode("utf-8"))
-                meta = payload_json.get("meta", {})
-                data = payload_json.get("data", {})
-                st.success("✅ File JSON terbaca.")
-                with st.expander("📋 Preview Isi JSON", expanded=True):
-                    st.write(f"**Dibuat:** {meta.get('exported_at', '-')}")
-                    preview = [{"Tabel": t, "Baris": len(data.get(t, []))} for t in data]
-                    st.dataframe(pd.DataFrame(preview), hide_index=True, use_container_width=False)
+            payload = json.loads(up_backup.getvalue().decode("utf-8"))
+            meta = payload.get("meta", {})
+            data = payload.get("data", {})
 
-            # ---- MODE + KONFIRMASI ----
+            st.success("✅ File backup terbaca.")
+            with st.expander("📋 Preview Isi", expanded=True):
+                st.write(f"**Dibuat:** {meta.get('exported_at', '-')}")
+                preview = [{"Tabel": t, "Baris": len(data.get(t, []))} for t in data]
+                st.dataframe(pd.DataFrame(preview), hide_index=True, use_container_width=False)
+
             mode = st.radio(
                 "Mode Import:",
                 ["replace", "merge"],
                 format_func=lambda x: {
-                    "replace": "🔄 Replace — hapus lalu restore",
+                    "replace": "🔄 Replace — hapus semua lalu restore",
                     "merge": "➕ Merge — tambah/timpa tanpa hapus",
                 }[x],
                 key="mode_import",
             )
+
             konfirmasi = st.checkbox("Saya mengerti risikonya.", key="konfirm_import")
 
             if st.button("🚀 Jalankan Import", type="primary", disabled=not konfirmasi, key="btn_import"):
                 with st.spinner(f"Mengimpor (mode {mode})..."):
                     try:
-                        if is_sqlite:
-                            summary = db.import_backup_sqlite(file_bytes, mode=mode)
-                            total = sum(v.get("baris", 0) if isinstance(v, dict) else 0 for v in summary.values())
-                            st.success(f"✅ Import .db selesai. {total:,} baris dipulihkan.")
-                            st.dataframe(pd.DataFrame([{"Tabel": k, "Baris": v.get("baris")} for k, v in summary.items()]), hide_index=True)
-                        else:
-                            summary = db.import_backup(payload_json, mode=mode)
-                            total = sum(v for v in summary.values() if isinstance(v, int))
-                            st.success(f"✅ Import JSON selesai. {total:,} baris dipulihkan.")
-                            st.dataframe(pd.DataFrame([{"Tabel": k, "Baris": v} for k, v in summary.items()]), hide_index=True)
-                        
+                        summary = db.import_backup(payload, mode=mode)
+                        total = sum(v for v in summary.values() if isinstance(v, int))
+                        st.success(f"✅ Import selesai. {total:,} baris dipulihkan.")
+                        st.dataframe(
+                            pd.DataFrame([{"Tabel": k, "Baris": v} for k, v in summary.items()]),
+                            hide_index=True, use_container_width=False,
+                        )
                         st.session_state.pop("backup_bytes", None)
-                        st.cache_data.clear()
                         st.rerun()
                     except Exception as e:
                         st.error(f"❌ Import gagal: {e}")
@@ -1025,7 +982,6 @@ def render_backup():
                         pd.DataFrame([{"Tabel": k, "Status": v} for k, v in summary.items()]),
                         hide_index=True, use_container_width=False,
                     )
-                    st.cache_data.clear()
                     st.rerun()
                 except Exception as e:
                     st.error(f"❌ Gagal: {e}")
